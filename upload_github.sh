@@ -37,7 +37,6 @@ CONFIG_FILES=(
     "start_mcp.sh"
     "run_consolidated.sh"
     "config.ini.example"
-    ".gitignore"
     "cleanup.sh"
 )
 
@@ -49,6 +48,9 @@ DOC_FILES=(
     "MCP_INSPECTOR_SETUP.md"
     "MCP_INSPECTOR_QUICK_SETUP.md"
 )
+
+# Flags
+FORCE_PUSH=false
 
 # Log function with timestamp
 log() {
@@ -150,24 +152,71 @@ setup_git_repo() {
     log "${GREEN}Git repository setup complete.${NC}"
 }
 
-# Function to perform git pull to get latest changes
-pull_latest_changes() {
-    log "${BLUE}Pulling latest changes from remote repository...${NC}"
+# Function to handle the repository synchronization
+sync_repository() {
+    log "${BLUE}Synchronizing repository...${NC}"
     
-    # Fetch and check if branch exists
+    # Fetch the latest changes from remote
     git fetch origin
-    if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
-        # Branch exists, pull changes
-        git pull origin "${BRANCH}" || { 
-            log "${RED}Failed to pull latest changes. Resolving conflicts may be required.${NC}"
-            log "${YELLOW}Please resolve any conflicts manually, then continue.${NC}"
-            read -p "Press Enter once conflicts are resolved or to continue anyway..."
-        }
-    else
-        log "${YELLOW}Branch ${BRANCH} doesn't exist on remote yet. Will create on push.${NC}"
-    fi
     
-    log "${GREEN}Pull operation completed.${NC}"
+    # Check if there's a divergence between local and remote
+    if git rev-parse HEAD &>/dev/null; then
+        LOCAL_HASH=$(git rev-parse HEAD)
+        REMOTE_HASH=$(git rev-parse origin/${BRANCH} 2>/dev/null || echo "none")
+        
+        if [ "$REMOTE_HASH" != "none" ] && [ "$LOCAL_HASH" != "$REMOTE_HASH" ]; then
+            log "${YELLOW}Local and remote repositories have diverged.${NC}"
+            
+            if [ "$FORCE_PUSH" = true ]; then
+                log "${YELLOW}Force push is enabled. Will overwrite remote history.${NC}"
+            else
+                log "${YELLOW}Attempting to integrate changes...${NC}"
+                
+                # Try to pull with rebase
+                git pull --rebase origin ${BRANCH} || {
+                    log "${RED}Failed to integrate changes. Conflicts may exist.${NC}"
+                    log "${YELLOW}Options:${NC}"
+                    log "${BLUE}1. Use --force-push to overwrite remote changes${NC}"
+                    log "${BLUE}2. Manually resolve conflicts${NC}"
+                    log "${BLUE}3. Create a new branch instead${NC}"
+                    
+                    log "${YELLOW}What would you like to do? [1/2/3/q to quit]${NC}"
+                    read -r choice
+                    
+                    case "$choice" in
+                        1)
+                            FORCE_PUSH=true
+                            log "${YELLOW}Force push enabled.${NC}"
+                            ;;
+                        2)
+                            log "${YELLOW}Please resolve conflicts manually, then continue.${NC}"
+                            log "${YELLOW}After resolving conflicts, run 'git rebase --continue'${NC}"
+                            log "${YELLOW}Then restart this script.${NC}"
+                            exit 1
+                            ;;
+                        3)
+                            NEW_BRANCH="${BRANCH}_$(date +%Y%m%d_%H%M%S)"
+                            log "${YELLOW}Creating new branch: ${NEW_BRANCH}${NC}"
+                            git checkout -b "$NEW_BRANCH"
+                            BRANCH="$NEW_BRANCH"
+                            ;;
+                        q|Q)
+                            log "${RED}Upload aborted by user.${NC}"
+                            exit 1
+                            ;;
+                        *)
+                            log "${RED}Invalid choice. Upload aborted.${NC}"
+                            exit 1
+                            ;;
+                    esac
+                }
+            fi
+        else
+            log "${GREEN}Repository is up to date or being initialized.${NC}"
+        fi
+    else
+        log "${YELLOW}This appears to be a new repository.${NC}"
+    fi
 }
 
 # Function to stage files - direct file method
@@ -261,14 +310,23 @@ push_changes() {
         git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
     fi
     
-    # Set upstream and push
-    git push -u origin "$BRANCH" || {
+    # Set push command with force option if requested
+    PUSH_CMD="git push -u origin $BRANCH"
+    if [ "$FORCE_PUSH" = true ]; then
+        PUSH_CMD="git push -u --force origin $BRANCH"
+        log "${YELLOW}Using force push. This will overwrite remote history!${NC}"
+    fi
+    
+    # Execute push command
+    eval $PUSH_CMD || {
         log "${RED}Push failed. Please check your credentials and try again.${NC}"
         log "${YELLOW}GitHub authentication troubleshooting:${NC}"
         log "${BLUE}1. Generate a Personal Access Token (PAT) at: https://github.com/settings/tokens${NC}"
         log "${BLUE}2. Configure Git to store credentials for GitHub:${NC}"
         log "   ${YELLOW}git config credential.https://github.com.helper store${NC}"
         log "${BLUE}3. Push again and when prompted, use your GitHub username and the PAT as password${NC}"
+        log "${BLUE}4. Or try again with --force-push option:${NC}"
+        log "   ${YELLOW}./upload_github.sh --run --force-push${NC}"
         return 1
     }
     
@@ -331,6 +389,18 @@ verify_upload() {
     fi
 }
 
+# Function to parse command-line arguments
+parse_args() {
+    while [[ "$#" -gt 0 ]]; do
+        case $1 in
+            --run) RUN=true ;;
+            --force-push) FORCE_PUSH=true ;;
+            *) log "${RED}Unknown parameter: $1${NC}" ;;
+        esac
+        shift
+    done
+}
+
 # Function to run the entire workflow
 run_workflow() {
     log "${BLUE}Starting GitHub upload workflow...${NC}"
@@ -339,7 +409,7 @@ run_workflow() {
     check_requirements || exit 1
     check_files_exist || exit 1
     setup_git_repo || exit 1
-    pull_latest_changes
+    sync_repository || exit 1
     stage_files || exit 1
     commit_changes || exit 1
     push_changes || exit 1
@@ -380,6 +450,10 @@ done
 log "${GREEN}Total files to upload: ${TOTAL_COUNT}${NC}"
 
 log "${GREEN}========================${NC}"
+log "${YELLOW}Usage Options:${NC}"
+log "${BLUE}--run            Execute the upload workflow${NC}"
+log "${BLUE}--force-push     Force push to repository (overwrites remote history)${NC}"
+log "${GREEN}========================${NC}"
 log "${YELLOW}Authentication Guidance:${NC}"
 log "${BLUE}1. For GitHub authentication, use:${NC}"
 log "   ${YELLOW}git config credential.https://github.com.helper store${NC}"
@@ -390,9 +464,14 @@ log "${YELLOW}Instructions:${NC}"
 log "${BLUE}1. Ensure you have git and curl installed${NC}"
 log "${BLUE}2. Run this script with the --run flag to execute:${NC}"
 log "   ${YELLOW}./upload_github.sh --run${NC}"
+log "${BLUE}3. If push fails due to conflicts, use force push:${NC}"
+log "   ${YELLOW}./upload_github.sh --run --force-push${NC}"
 log "${GREEN}========================${NC}"
 
+# Parse command-line arguments
+parse_args "$@"
+
 # Check if --run flag is provided
-if [[ "$1" == "--run" ]]; then
+if [[ "$RUN" == true ]]; then
     run_workflow
 fi
