@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "vbox-whonix": {
+      "command": "python",
+      "args": ["./consolidated_mcp_whonix_with_file_transfer.py"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "metadata": {
+        "name": "VBox Whonix MCP Server",
+        "version": "0.4.0",
+        "description": "MCP server for managing Whonix VMs in VirtualBox with secure file transfer capabilities"
+      }
+    }
+  }
+}
