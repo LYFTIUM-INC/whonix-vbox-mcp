@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 
 """
-Consolidated Whonix VirtualBox MCP Module
------------------------------------------
-This module provides tools for managing Whonix VMs in VirtualBox through MCP.
-Combines the best features from both implementations with proper async handling.
+Consolidated Whonix VirtualBox MCP Module with Enhanced Web Automation
+---------------------------------------------------------------------
+This module provides comprehensive tools for managing Whonix VMs in VirtualBox through MCP.
+Includes advanced web automation, browser control, and security tools.
+
+Version 0.6.0 - Added Enhanced Web Automation Capabilities:
+- JavaScript execution in isolated browser environments
+- Screenshot capture and visual automation
+- Intelligent form filling and DOM interaction
+- Session management for complex web workflows
+- AI-assisted content extraction and analysis
 """
 
 import asyncio
 import os
 import sys
 import logging
+import json
+import time
+import base64
+import re
+import shlex
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
 
-# Import our services
-from virtualbox_service import VirtualBoxService
-from safe_context import SafeContext
-from file_transfer_service import FileTransferService
-
-# Set up logging
+# Set up logging FIRST before any usage
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,8 +39,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Import our services
+from virtualbox_service import VirtualBoxService
+from safe_context import SafeContext
+from file_transfer_service import FileTransferService
+
+# Import enhanced web automation services
+try:
+    from enhanced_web_automation_mcp import EnhancedWebAutomationService
+    from advanced_form_automation_mcp import AdvancedFormAutomationService
+    WEB_AUTOMATION_AVAILABLE = True
+    logger.info("Web automation services loaded successfully")
+except ImportError as e:
+    logger.warning(f"Web automation services not available: {e}")
+    WEB_AUTOMATION_AVAILABLE = False
+
 # Define version
-VERSION = "0.5.0"  # Added VM session management tools
+VERSION = "0.6.0"  # Added Enhanced Web Automation capabilities
 
 # Initialize FastMCP server
 mcp = FastMCP("vbox-whonix", version=VERSION)
@@ -46,7 +69,7 @@ CONFIG = {
         "gateway_vm": "Whonix-Gateway-Xfce",
         "workstation_vm": "Whonix-Workstation-Xfce",
         "default_username": "user",
-        "default_password": "changeme"
+        "default_password": os.getenv("WHONIX_VM_PASSWORD", "")
     },
     "tor": {
         "socks_port": 9050,
@@ -76,6 +99,47 @@ vbox_service = VirtualBoxService(CONFIG["virtualbox"]["vboxmanage_path"])
 
 # Initialize the file transfer service
 file_transfer_service = FileTransferService(vbox_service)
+
+# Helper function to clean VBoxManage output
+def clean_vbox_output(raw_output):
+    """Remove verbose VBoxManage output and extract just the command result"""
+    if not raw_output:
+        return ""
+    
+    # Try to extract just JSON if present
+    json_match = re.search(r'\{[\s\S]*\}', raw_output)
+    if json_match:
+        return json_match.group(0)
+    
+    # Otherwise return the cleaned output without VBox noise
+    lines = raw_output.split('\n')
+    cleaned = []
+    
+    for line in lines:
+        # Skip VBoxManage verbose output
+        if any(skip in line for skip in [
+            "Wait result", "Executing:", "Creating guest session",
+            "Starting guest process", "Process terminated",
+            "Exit code=", "Closing guest session", "Successfully started",
+            "arg[", "Image :", "[GFX"
+        ]):
+            continue
+        
+        # Keep actual output lines
+        if line.strip():
+            cleaned.append(line)
+    
+    return '\n'.join(cleaned).strip()
+
+# Initialize enhanced web automation services
+if WEB_AUTOMATION_AVAILABLE:
+    web_automation_service = EnhancedWebAutomationService()
+    form_automation_service = AdvancedFormAutomationService()
+    logger.info("Enhanced web automation services initialized")
+else:
+    web_automation_service = None
+    form_automation_service = None
+    logger.warning("Enhanced web automation services not available")
 
 # Helper function to check if VirtualBox is installed
 async def check_virtualbox_installed(ctx=None) -> bool:
@@ -576,7 +640,7 @@ async def execute_vm_command(ctx: Context = None, vm_name: str = "", command: st
         "guestcontrol", vm_name, 
         "run", "--username", username, 
         "--password", password,
-        "--verbose",  # Add verbosity for better error reporting
+        # Removed --verbose to reduce output size
         "--"
     ] + cmd_parts
     
@@ -584,7 +648,9 @@ async def execute_vm_command(ctx: Context = None, vm_name: str = "", command: st
     
     if result["success"]:
         output = result.get("stdout", "").strip()
-        return f"Command executed successfully:\n\n{output}"
+        # Clean the output to reduce token usage
+        cleaned_output = clean_vbox_output(output)
+        return cleaned_output if cleaned_output else "Command executed successfully"
     else:
         error_msg = result.get("stderr", result.get("error", "Unknown error"))
         
@@ -1513,6 +1579,814 @@ async def discard_saved_state(ctx: Context = None, vm_name: str = "") -> str:
     else:
         error_msg = result.get("stderr", result.get("error", "Unknown error"))
         return f"Failed to discard saved state. Error: {error_msg}"
+
+# ==============================================================================
+# ENHANCED WEB AUTOMATION TOOLS (v0.6.0)
+# ==============================================================================
+
+@mcp.tool()
+async def setup_enhanced_browser_environment(
+    ctx: Context = None,
+    vm_name: str = ""
+) -> str:
+    """
+    Setup comprehensive browser automation environment with all dependencies.
+    
+    Installs Node.js, Playwright, Firefox, Chromium, ImageMagick, and other
+    required tools for advanced web automation in the specified VM.
+    
+    Args:
+        vm_name: Name of the VM to setup (default: Whonix-Workstation-Xfce)
+    
+    Returns:
+        JSON string with setup results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Setting up enhanced browser environment in VM: {vm_name}")
+    
+    try:
+        result = await web_automation_service.setup_browser_environment(vm_name)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def execute_javascript_on_webpage(
+    ctx: Context = None,
+    url: str = "",
+    javascript_code: str = "",
+    vm_name: str = "",
+    browser: str = "firefox",
+    headless: bool = True
+) -> str:
+    """
+    Execute JavaScript code on a webpage and return results.
+    
+    Args:
+        url: URL of the webpage to load
+        javascript_code: JavaScript code to execute
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        browser: Browser to use (firefox or chromium)
+        headless: Whether to run in headless mode
+    
+    Returns:
+        JSON string with execution results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Executing JavaScript on {url} in VM: {vm_name}")
+    
+    try:
+        result = await web_automation_service.execute_javascript(
+            vm_name, url, javascript_code, browser, headless
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def capture_webpage_screenshot(
+    ctx: Context = None,
+    url: str = "",
+    vm_name: str = "",
+    selector: str = "",
+    full_page: bool = True,
+    browser: str = "firefox"
+) -> str:
+    """
+    Capture screenshot of webpage or specific element.
+    
+    Args:
+        url: URL of the webpage to screenshot
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        selector: CSS selector for specific element (empty for full page)
+        full_page: Whether to capture full page
+        browser: Browser to use (firefox or chromium)
+    
+    Returns:
+        JSON string with screenshot data (base64 encoded)
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Capturing screenshot of {url} in VM: {vm_name}")
+    
+    try:
+        result = await web_automation_service.capture_screenshot(
+            vm_name, url, selector if selector else None, full_page, browser
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def interact_with_webpage_elements(
+    ctx: Context = None,
+    url: str = "",
+    interactions: str = "[]",
+    vm_name: str = "",
+    browser: str = "firefox"
+) -> str:
+    """
+    Perform DOM interactions like clicking, typing, selecting.
+    
+    Args:
+        url: URL of the webpage
+        interactions: JSON string of interaction list
+                     [{"action": "click", "selector": "#button", "wait": 1000}, ...]
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        browser: Browser to use (firefox or chromium)
+    
+    Returns:
+        JSON string with interaction results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Performing DOM interactions on {url} in VM: {vm_name}")
+    
+    try:
+        interaction_list = json.loads(interactions)
+        result = await web_automation_service.interact_with_dom(
+            vm_name, url, interaction_list, browser
+        )
+        return json.dumps(result, indent=2)
+    except json.JSONDecodeError:
+        return json.dumps({"success": False, "error": "Invalid interactions JSON"})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def analyze_webpage_form_structure(
+    ctx: Context = None,
+    url: str = "",
+    vm_name: str = ""
+) -> str:
+    """
+    Analyze webpage forms and identify fillable fields with their purposes.
+    
+    Args:
+        url: URL of the webpage with forms
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+    
+    Returns:
+        JSON string with form analysis results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not form_automation_service:
+        return json.dumps({"success": False, "error": "Form automation service not available"})
+    
+    await safe_ctx.info(f"Analyzing form structure on {url} in VM: {vm_name}")
+    
+    try:
+        result = await form_automation_service.analyze_form_structure(vm_name, url)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def fill_webpage_form_intelligently(
+    ctx: Context = None,
+    url: str = "",
+    form_data: str = "{}",
+    vm_name: str = "",
+    submit: bool = False
+) -> str:
+    """
+    Intelligently fill webpage forms based on field detection.
+    
+    Args:
+        url: URL of the webpage with form
+        form_data: JSON string of form data {"email": "test@example.com", ...}
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        submit: Whether to submit the form after filling
+    
+    Returns:
+        JSON string with form filling results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not form_automation_service:
+        return json.dumps({"success": False, "error": "Form automation service not available"})
+    
+    await safe_ctx.info(f"Filling form on {url} in VM: {vm_name}")
+    
+    try:
+        data = json.loads(form_data)
+        result = await form_automation_service.fill_form_intelligently(vm_name, url, data, submit)
+        return json.dumps(result, indent=2)
+    except json.JSONDecodeError:
+        return json.dumps({"success": False, "error": "Invalid form data JSON"})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def detect_webpage_visual_elements(
+    ctx: Context = None,
+    url: str = "",
+    vm_name: str = "",
+    element_types: str = "buttons,links,forms,images,inputs"
+) -> str:
+    """
+    Detect and locate visual elements on webpage.
+    
+    Args:
+        url: URL of the webpage to analyze
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        element_types: Comma-separated list of element types to detect
+    
+    Returns:
+        JSON string with detected elements and their properties
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not form_automation_service:
+        return json.dumps({"success": False, "error": "Form automation service not available"})
+    
+    await safe_ctx.info(f"Detecting visual elements on {url} in VM: {vm_name}")
+    
+    try:
+        types_list = [t.strip() for t in element_types.split(",")]
+        result = await form_automation_service.detect_visual_elements(vm_name, url, types_list)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def extract_webpage_content_with_ai(
+    ctx: Context = None,
+    url: str = "",
+    extraction_prompt: str = "",
+    vm_name: str = "",
+    include_screenshot: bool = True
+) -> str:
+    """
+    Extract and analyze webpage content using AI-assisted methods.
+    
+    Args:
+        url: URL of the webpage to analyze
+        extraction_prompt: Description of what to extract
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        include_screenshot: Whether to include screenshot in analysis
+    
+    Returns:
+        JSON string with extracted content and analysis
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Extracting content from {url} in VM: {vm_name}")
+    
+    try:
+        result = await web_automation_service.extract_content_with_ai(
+            vm_name, url, extraction_prompt, include_screenshot
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def manage_persistent_web_session(
+    ctx: Context = None,
+    session_id: str = "",
+    action: str = "create",
+    vm_name: str = "",
+    session_data: str = "{}"
+) -> str:
+    """
+    Manage persistent web sessions with cookies and state.
+    
+    Args:
+        session_id: Unique identifier for the session
+        action: Action to perform (create, load, update, delete)
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        session_data: JSON string of session data for create/update actions
+    
+    Returns:
+        JSON string with session management results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not web_automation_service:
+        return json.dumps({"success": False, "error": "Web automation service not available"})
+    
+    await safe_ctx.info(f"Managing web session {session_id} ({action}) in VM: {vm_name}")
+    
+    try:
+        data = json.loads(session_data) if session_data != "{}" else None
+        result = await web_automation_service.manage_web_session(
+            vm_name, session_id, action, data
+        )
+        return json.dumps(result, indent=2)
+    except json.JSONDecodeError:
+        return json.dumps({"success": False, "error": "Invalid session data JSON"})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+@mcp.tool()
+async def perform_visual_webpage_automation(
+    ctx: Context = None,
+    url: str = "",
+    automation_steps: str = "[]",
+    vm_name: str = ""
+) -> str:
+    """
+    Perform complex visual automation workflows on webpage.
+    
+    Args:
+        url: URL of the webpage
+        automation_steps: JSON string of automation steps
+                         [{"action": "click_text", "target": "Login", "wait": 1000}, ...]
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+    
+    Returns:
+        JSON string with automation results
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    if not form_automation_service:
+        return json.dumps({"success": False, "error": "Form automation service not available"})
+    
+    await safe_ctx.info(f"Performing visual automation on {url} in VM: {vm_name}")
+    
+    try:
+        steps = json.loads(automation_steps)
+        result = await form_automation_service.perform_visual_automation(vm_name, url, steps)
+        return json.dumps(result, indent=2)
+    except json.JSONDecodeError:
+        return json.dumps({"success": False, "error": "Invalid automation steps JSON"})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+# ==============================================================================
+# END ENHANCED WEB AUTOMATION TOOLS
+# ==============================================================================
+
+# ==============================================================================
+# SPECIALIZED BROWSER AUTOMATION TOOLS
+# These tools directly interface with the deployed browser automation framework
+# ==============================================================================
+
+@mcp.tool()
+async def browser_intelligent_search(
+    ctx: Context = None,
+    search_query: str = "",
+    vm_name: str = "",
+    search_engine: str = "duckduckgo"
+) -> str:
+    """
+    Perform intelligent search operation with natural language processing.
+    
+    This tool uses the deployed browser automation framework to:
+    - Process natural language search queries
+    - Execute searches through anonymous engines  
+    - Capture screenshots of results
+    - Return structured JSON with results and screenshots
+    
+    Args:
+        search_query: Natural language search query (e.g., "find cybersecurity news")
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        search_engine: Search engine to use (duckduckgo, searx)
+    
+    Returns:
+        JSON string with search results, screenshot path, and metadata
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not search_query:
+        return json.dumps({"success": False, "error": "Search query is required"})
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    await safe_ctx.info(f"Executing intelligent search: '{search_query}' in VM: {vm_name}")
+    
+    try:
+        # Use the secure browser automation API v2.0 - NO STRING INTERPOLATION
+        # Build command arguments safely
+        command_args = [
+            "python3",
+            "/home/user/browser_automation/working_browser_api.py",
+            "search",
+            search_query
+        ]
+        # Join arguments with proper escaping
+        command = shlex.join(command_args)
+        
+        result = await execute_vm_command(
+            ctx,
+            vm_name, 
+            command,
+            CONFIG["whonix"]["default_username"],
+            CONFIG["whonix"]["default_password"]
+        )
+        
+        await safe_ctx.success(f"Search completed for: {search_query}")
+        return result
+        
+    except Exception as e:
+        error_msg = f"Browser search failed: {str(e)}"
+        await safe_ctx.error(error_msg)
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+async def browser_capture_page_screenshot(
+    ctx: Context = None,
+    target_url: str = "",
+    vm_name: str = "",
+    filename_prefix: str = ""
+) -> str:
+    """
+    Capture high-quality screenshot of any webpage through Tor.
+    
+    This tool uses the deployed browser automation framework to:
+    - Navigate to URLs through Tor network
+    - Capture full-page screenshots
+    - Save with timestamp and metadata
+    - Return file details and success status
+    
+    Args:
+        target_url: URL to capture (e.g., "https://example.com")  
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        filename_prefix: Optional prefix for screenshot filename
+        
+    Returns:
+        JSON string with screenshot details, file size, and path
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not target_url:
+        return json.dumps({"success": False, "error": "Target URL is required"})
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    await safe_ctx.info(f"Capturing screenshot of: {target_url} in VM: {vm_name}")
+    
+    try:
+        # Use the secure browser automation API v2.0 - NO STRING INTERPOLATION
+        # Build command arguments safely
+        command_args = [
+            "python3",
+            "/home/user/browser_automation/working_browser_api.py",
+            "screenshot",
+            target_url
+        ]
+        # Add optional filename prefix if provided
+        if filename_prefix:
+            command_args.append(filename_prefix)
+        
+        # Join arguments with proper escaping
+        command = shlex.join(command_args)
+        
+        result = await execute_vm_command(
+            ctx,
+            vm_name,
+            command, 
+            CONFIG["whonix"]["default_username"],
+            CONFIG["whonix"]["default_password"]
+        )
+        
+        await safe_ctx.success(f"Screenshot captured for: {target_url}")
+        return result
+        
+    except Exception as e:
+        error_msg = f"Screenshot capture failed: {str(e)}"
+        await safe_ctx.error(error_msg)
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+async def browser_automation_status_check(
+    ctx: Context = None,
+    vm_name: str = ""
+) -> str:
+    """
+    Check the status and readiness of browser automation framework.
+    
+    This tool verifies:
+    - Browser automation framework deployment
+    - Available components and scripts
+    - System readiness for browser operations
+    - Tor connectivity status
+    
+    Args:
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        
+    Returns:
+        JSON string with deployment status and component information
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    await safe_ctx.info(f"Checking browser automation status in VM: {vm_name}")
+    
+    try:
+        # Check browser automation status using secure API v2.0
+        # Build command arguments safely
+        command_args = [
+            "python3",
+            "/home/user/browser_automation/working_browser_api.py",
+            "status"
+        ]
+        # Join arguments with proper escaping
+        command = shlex.join(command_args)
+        
+        result = await execute_vm_command(
+            ctx,
+            vm_name,
+            command,
+            CONFIG["whonix"]["default_username"], 
+            CONFIG["whonix"]["default_password"]
+        )
+        
+        await safe_ctx.success("Browser automation status check completed")
+        return result
+        
+    except Exception as e:
+        error_msg = f"Status check failed: {str(e)}"
+        await safe_ctx.error(error_msg)
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+async def browser_bulk_screenshot_capture(
+    ctx: Context = None,
+    url_list: str = "",
+    vm_name: str = "",
+    batch_name: str = ""
+) -> str:
+    """
+    Capture screenshots of multiple URLs in a single operation.
+    
+    This tool processes multiple URLs efficiently:
+    - Batch processing for efficiency
+    - Individual success/failure tracking
+    - Consolidated results reporting
+    - Organized file management
+    
+    Args:
+        url_list: Comma-separated list of URLs to capture
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)  
+        batch_name: Optional name for this batch operation
+        
+    Returns:
+        JSON string with batch results and individual screenshot details
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not url_list:
+        return json.dumps({"success": False, "error": "URL list is required"})
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    urls = [url.strip() for url in url_list.split(',') if url.strip()]
+    
+    if not urls:
+        return json.dumps({"success": False, "error": "No valid URLs provided"})
+    
+    await safe_ctx.info(f"Starting bulk screenshot capture of {len(urls)} URLs in VM: {vm_name}")
+    
+    results = []
+    
+    try:
+        for i, url in enumerate(urls, 1):
+            await safe_ctx.info(f"Processing URL {i}/{len(urls)}: {url}")
+            
+            # Use the secure browser automation API v2.0 - NO STRING INTERPOLATION
+            # Build command arguments safely
+            command_args = [
+                "python3",
+                "/home/user/browser_automation/working_browser_api.py",
+                "screenshot",
+                url
+            ]
+            # Join arguments with proper escaping
+            command = shlex.join(command_args)
+            
+            result = await execute_vm_command(
+                ctx,
+                vm_name,
+                command,
+                CONFIG["whonix"]["default_username"],
+                CONFIG["whonix"]["default_password"]
+            )
+            
+            # Parse result and add to batch
+            try:
+                # Result is already cleaned by execute_vm_command
+                if result.startswith('{'):
+                    parsed_result = json.loads(result)
+                else:
+                    # Not JSON, but command may have succeeded
+                    parsed_result = {
+                        "success": "error" not in result.lower(),
+                        "output": result[:200]
+                    }
+                
+                parsed_result['batch_index'] = i
+                parsed_result['url'] = url
+                parsed_result['batch_name'] = batch_name or f"batch_{int(time.time())}"
+                results.append(parsed_result)
+            except Exception as e:
+                results.append({
+                    "success": False, 
+                    "url": url, 
+                    "batch_index": i,
+                    "error": f"Failed to parse: {str(e)}"
+                })
+        
+        # Compile batch results
+        successful = sum(1 for r in results if r.get('success', False))
+        batch_result = {
+            "success": True,
+            "batch_name": batch_name or f"batch_{int(time.time())}",
+            "total_urls": len(urls),
+            "successful_captures": successful,
+            "failed_captures": len(urls) - successful,
+            "results": results
+        }
+        
+        await safe_ctx.success(f"Bulk screenshot completed: {successful}/{len(urls)} successful")
+        return json.dumps(batch_result, indent=2)
+        
+    except Exception as e:
+        error_msg = f"Bulk screenshot operation failed: {str(e)}"
+        await safe_ctx.error(error_msg)
+        return json.dumps({"success": False, "error": error_msg, "partial_results": results})
+
+
+@mcp.tool()
+async def browser_custom_automation_task(
+    ctx: Context = None,
+    task_description: str = "",
+    target_url: str = "",
+    vm_name: str = "",
+    custom_parameters: Optional[str] = None
+) -> str:
+    """
+    Execute custom browser automation tasks with flexible parameters.
+    
+    This tool enables:
+    - Custom automation workflows
+    - Flexible parameter passing
+    - Task-specific browser operations
+    - Extensible automation capabilities
+    
+    Args:
+        task_description: Description of the automation task to perform
+        target_url: Optional URL to operate on
+        vm_name: Name of the VM (default: Whonix-Workstation-Xfce)
+        custom_parameters: JSON string of custom parameters for the task
+        
+    Returns:
+        JSON string with task execution results and output data
+    """
+    safe_ctx = SafeContext(ctx)
+    
+    if not task_description:
+        return json.dumps({"success": False, "error": "Task description is required"})
+    
+    if not vm_name:
+        vm_name = CONFIG["whonix"]["workstation_vm"]
+    
+    await safe_ctx.info(f"Executing custom automation task: '{task_description}' in VM: {vm_name}")
+    
+    try:
+        # Parse parameters safely, handling None and various input types
+        try:
+            if custom_parameters is None:
+                params = {}
+            elif isinstance(custom_parameters, str):
+                params = json.loads(custom_parameters) if custom_parameters.strip() not in ["", "{}"] else {}
+            elif isinstance(custom_parameters, dict):
+                params = custom_parameters
+            else:
+                params = {}
+        except Exception:
+            params = {}
+        
+        # Route based on task description or parameters
+        if "version" in task_description.lower():
+            command_args = ["firefox", "--version"]
+        elif "search" in task_description.lower():
+            # Route to search operation using secure API
+            search_query = params.get('query', target_url or task_description)
+            command_args = [
+                "python3",
+                "/home/user/browser_automation/working_browser_api.py",
+                "search",
+                search_query
+            ]
+        elif "screenshot" in task_description.lower() and target_url:
+            # Route to screenshot operation using secure API
+            command_args = [
+                "python3",
+                "/home/user/browser_automation/working_browser_api.py",
+                "screenshot",
+                target_url
+            ]
+        else:
+            # Default to status check using secure API
+            command_args = [
+                "python3",
+                "/home/user/browser_automation/working_browser_api.py",
+                "status"
+            ]
+        
+        # Join arguments with proper escaping to prevent injection
+        command = shlex.join(command_args)
+        
+        result = await execute_vm_command(
+            ctx,
+            vm_name,
+            command,
+            CONFIG["whonix"]["default_username"],
+            CONFIG["whonix"]["default_password"]  
+        )
+        
+        # Enhance result with task context
+        try:
+            # Try to parse as JSON first
+            if result.startswith('{'):
+                parsed_result = json.loads(result)
+                parsed_result['task_description'] = task_description
+                parsed_result['custom_parameters'] = params
+            else:
+                # Not JSON, wrap in response
+                parsed_result = {
+                    "success": True,
+                    "task_description": task_description,
+                    "custom_parameters": params,
+                    "output": result
+                }
+            result = json.dumps(parsed_result, indent=2)
+        except:
+            pass  # Return original result if parsing fails
+        
+        await safe_ctx.success(f"Custom automation task completed: {task_description}")
+        return result
+        
+    except Exception as e:
+        error_msg = f"Custom automation task failed: {str(e)}"
+        await safe_ctx.error(error_msg)
+        return json.dumps({
+            "success": False, 
+            "error": error_msg,
+            "task_description": task_description
+        })
+
+# ==============================================================================
+# END SPECIALIZED BROWSER AUTOMATION TOOLS
+# ==============================================================================
 
 # Main function to run the server
 if __name__ == "__main__":

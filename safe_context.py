@@ -106,3 +106,7 @@ class SafeContext:
     async def debug(self, message: str) -> None:
         """Log a debug message."""
         await self.log("debug", message)
+    
+    async def success(self, message: str) -> None:
+        """Log a success message (using info level)."""
+        await self.log("info", f"✅ {message}")
