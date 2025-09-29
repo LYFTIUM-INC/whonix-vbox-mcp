@@ -2010,9 +2010,10 @@ async def browser_intelligent_search(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/working_browser_api.py",
+            "/home/user/browser_automation/browser_api_v2.py",
             "search",
-            search_query
+            search_query,
+            "10"  # max results
         ]
         # Join arguments with proper escaping
         command = shlex.join(command_args)
@@ -2073,8 +2074,8 @@ async def browser_capture_page_screenshot(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/working_browser_api.py",
-            "screenshot",
+            "/home/user/browser_automation/browser_api_v2.py",
+            "capture",
             target_url
         ]
         # Add optional filename prefix if provided
@@ -2133,7 +2134,7 @@ async def browser_automation_status_check(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/working_browser_api.py",
+            "/home/user/browser_automation/browser_api_v2.py",
             "status"
         ]
         # Join arguments with proper escaping
@@ -2205,8 +2206,8 @@ async def browser_bulk_screenshot_capture(
             # Build command arguments safely
             command_args = [
                 "python3",
-                "/home/user/browser_automation/working_browser_api.py",
-                "screenshot",
+                "/home/user/browser_automation/browser_api_v2.py",
+                "capture",
                 url
             ]
             # Join arguments with proper escaping
@@ -2322,7 +2323,7 @@ async def browser_custom_automation_task(
             search_query = params.get('query', target_url or task_description)
             command_args = [
                 "python3",
-                "/home/user/browser_automation/working_browser_api.py",
+                "/home/user/browser_automation/browser_api_v2.py",
                 "search",
                 search_query
             ]
@@ -2330,15 +2331,15 @@ async def browser_custom_automation_task(
             # Route to screenshot operation using secure API
             command_args = [
                 "python3",
-                "/home/user/browser_automation/working_browser_api.py",
-                "screenshot",
+                "/home/user/browser_automation/browser_api_v2.py",
+                "capture",
                 target_url
             ]
         else:
             # Default to status check using secure API
             command_args = [
                 "python3",
-                "/home/user/browser_automation/working_browser_api.py",
+                "/home/user/browser_automation/browser_api_v2.py",
                 "status"
             ]
         
