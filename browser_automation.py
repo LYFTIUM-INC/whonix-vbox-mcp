@@ -1026,10 +1026,11 @@ class SmartTruncator:
 class EnhancedSearchAPI:
     """Enhanced search API with multi-engine fallback and rate limiting"""
 
-    def __init__(self, use_proxy: bool = True):
+    def __init__(self, use_proxy: bool = True, cache=None):
         self.use_proxy = use_proxy
         self.proxy = 'socks5://127.0.0.1:9050' if use_proxy else None
         self.rate_limiter = SearchRateLimiter()
+        self.cache = cache  # Accept cache from BrowserAPIv2
 
         # Initialize multi-engine search if available
         if MULTI_ENGINE_AVAILABLE:
@@ -1046,7 +1047,7 @@ class EnhancedSearchAPI:
             logger.error("No search engines available")
 
     def search(self, query: str, max_results: int = 10) -> Dict:
-        """Perform search with multi-engine fallback and rate limiting"""
+        """Perform search with multi-engine fallback, caching, and rate limiting"""
         if not self.available:
             return {
                 'success': False,
@@ -1055,6 +1056,15 @@ class EnhancedSearchAPI:
                 'results': [],
                 'total': 0
             }
+
+        # Check cache first (if available)
+        cache_key = f"search:{query}:{max_results}"
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached:
+                logger.info(f"Cache HIT for query: {query}")
+                cached['cache_hit'] = True
+                return cached
 
         # Check rate limiter
         allowed, wait_time = self.rate_limiter.should_allow_request()
@@ -1065,17 +1075,31 @@ class EnhancedSearchAPI:
         try:
             # Use multi-engine search if available
             if self.multi_engine:
-                logger.info(f"Using multi-engine search for query: {query}")
+                logger.info(f"Cache MISS - Using multi-engine search for query: {query}")
                 result = asyncio.run(self.multi_engine.search(query, max_results))
 
                 # Record success/failure
                 self.rate_limiter.record_request(result['success'], result.get('total', 0))
 
+                # Cache successful results (TTL: 1 hour)
+                if self.cache and result['success']:
+                    self.cache.set(cache_key, result, ttl=3600)
+                    logger.info(f"Cached search results for query: {query}")
+
+                result['cache_hit'] = False
                 return result
             else:
                 # Fallback to single-engine DuckDuckGo
-                logger.info(f"Using single-engine DuckDuckGo for query: {query}")
-                return self._single_engine_search(query, max_results)
+                logger.info(f"Cache MISS - Using single-engine DuckDuckGo for query: {query}")
+                result = self._single_engine_search(query, max_results)
+
+                # Cache successful results
+                if self.cache and result['success']:
+                    self.cache.set(cache_key, result, ttl=3600)
+                    logger.info(f"Cached search results for query: {query}")
+
+                result['cache_hit'] = False
+                return result
 
         except Exception as e:
             logger.error(f"Search failed: {str(e)}")
@@ -1085,7 +1109,8 @@ class EnhancedSearchAPI:
                 'error': str(e),
                 'query': query,
                 'results': [],
-                'total': 0
+                'total': 0,
+                'cache_hit': False
             }
 
     def _single_engine_search(self, query: str, max_results: int = 10) -> Dict:
@@ -2364,24 +2389,24 @@ class BrowserAPIv2:
         self.use_proxy = use_proxy
         self.max_workers = max_workers
 
-        # Initialize components with enhanced managers
-        self.network_manager = EnhancedNetworkManager()
-        self.js_executor = EnhancedJavaScriptExecutor()
-        self.search_api = EnhancedSearchAPI(use_proxy=use_proxy)
-        self.form_handler = FormHandler(use_proxy=use_proxy)
-        self.session_manager = SessionManager()
-        self.stealth_browser = StealthBrowser(use_proxy=use_proxy)
-        self.content_extractor = ContentExtractor()
-        self.parallel_processor = ParallelProcessor(max_workers=max_workers)
-
-        # OPTIMIZATION: Add caching and truncation
-        # Use persistent cache if available, fallback to in-memory
+        # Initialize cache first (needed by other components)
+        # OPTIMIZATION: Use persistent cache if available, fallback to in-memory
         if PERSISTENT_CACHE_AVAILABLE:
             self.cache = get_cache()
             logger.info("Using persistent SQLite cache")
         else:
             self.cache = ResponseCache(max_size=100, default_ttl=300)
             logger.warning("Using in-memory cache (not persistent)")
+
+        # Initialize components with enhanced managers (pass cache to search API)
+        self.network_manager = EnhancedNetworkManager()
+        self.js_executor = EnhancedJavaScriptExecutor()
+        self.search_api = EnhancedSearchAPI(use_proxy=use_proxy, cache=self.cache)
+        self.form_handler = FormHandler(use_proxy=use_proxy)
+        self.session_manager = SessionManager()
+        self.stealth_browser = StealthBrowser(use_proxy=use_proxy)
+        self.content_extractor = ContentExtractor()
+        self.parallel_processor = ParallelProcessor(max_workers=max_workers)
 
         self.truncator = SmartTruncator(max_tokens=10000)
 
