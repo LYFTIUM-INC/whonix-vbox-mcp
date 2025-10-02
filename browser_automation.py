@@ -360,7 +360,13 @@ class EnhancedNetworkManager:
     async def _tor_request(self, url: str, method: str, **kwargs) -> Dict[str, Any]:
         """Make request through Tor SOCKS proxy"""
         try:
-            connector = aiohttp.ProxyConnector.from_url(self.tor_socks_proxy)
+            # Create SSL context that doesn't verify certificates (needed for Tor)
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            connector = aiohttp.ProxyConnector.from_url(self.tor_socks_proxy, ssl=ssl_context)
 
             async with aiohttp.ClientSession(
                 connector=connector,
@@ -419,7 +425,13 @@ class EnhancedNetworkManager:
     async def _tor_bridge_request(self, url: str, method: str, **kwargs) -> Dict[str, Any]:
         """Make request through Tor with bridge configuration"""
         try:
-            connector = aiohttp.ProxyConnector.from_url(self.tor_socks_proxy)
+            # Create SSL context that doesn't verify certificates (needed for Tor)
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            connector = aiohttp.ProxyConnector.from_url(self.tor_socks_proxy, ssl=ssl_context)
 
             async with aiohttp.ClientSession(
                 connector=connector,
@@ -1782,6 +1794,9 @@ class StealthBrowser:
                 cmd.extend(['-H', f'{key}: {value}'])
 
             cmd.extend(['--compressed', '--http2'])
+
+            # Disable SSL verification (needed for Tor with outdated system clocks)
+            cmd.extend(['--insecure'])
 
             if self.use_proxy:
                 cmd.extend(['--socks5-hostname', '127.0.0.1:9050'])
