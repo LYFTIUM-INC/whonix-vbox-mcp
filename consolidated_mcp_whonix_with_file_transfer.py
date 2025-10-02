@@ -8,7 +8,7 @@ Includes modern browser automation, secure file transfer, and VM management.
 
 Version 0.7.0 - Modern Browser Automation (Production-Ready):
 - 28 production-ready MCP tools (10 legacy tools removed)
-- Modern browser_api_v2_consolidated architecture (100% success rate)
+- Modern browser_automation architecture (100% success rate)
 - Intelligent search through anonymous engines (DuckDuckGo, Searx)
 - High-quality screenshot capture through Tor
 - Custom automation with flexible task execution
@@ -47,10 +47,10 @@ from virtualbox_service import VirtualBoxService
 from safe_context import SafeContext
 from file_transfer_service import FileTransferService
 
-# Legacy web automation services removed - use modern browser_api_v2_consolidated instead
+# Legacy web automation services removed - use modern browser_automation instead
 
 # Define version
-VERSION = "0.7.0"  # Removed legacy tools, using modern browser_api_v2_consolidated (29 tools)
+VERSION = "0.7.0"  # Removed legacy tools, using modern browser_automation (28 tools)
 
 # Initialize FastMCP server
 mcp = FastMCP("vbox-whonix", version=VERSION)
@@ -126,7 +126,7 @@ def clean_vbox_output(raw_output):
     
     return '\n'.join(cleaned).strip()
 
-# Legacy web automation services removed - modern browser tools use browser_api_v2_consolidated
+# Legacy web automation services removed - modern browser tools use browser_automation
 
 # Helper function to check if VirtualBox is installed
 async def check_virtualbox_installed(ctx=None) -> bool:
@@ -1612,7 +1612,7 @@ async def browser_intelligent_search(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/browser_api_v2_consolidated.py",
+            "/home/user/browser_automation/browser_automation.py",
             "search",
             search_query,
             "10"  # max results
@@ -1676,7 +1676,7 @@ async def browser_capture_page_screenshot(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/browser_api_v2_consolidated.py",
+            "/home/user/browser_automation/browser_automation.py",
             "capture",
             target_url
         ]
@@ -1736,7 +1736,7 @@ async def browser_automation_status_check(
         # Build command arguments safely
         command_args = [
             "python3",
-            "/home/user/browser_automation/browser_api_v2_consolidated.py",
+            "/home/user/browser_automation/browser_automation.py",
             "status"
         ]
         # Join arguments with proper escaping
@@ -1808,7 +1808,7 @@ async def browser_bulk_screenshot_capture(
             # Build command arguments safely
             command_args = [
                 "python3",
-                "/home/user/browser_automation/browser_api_v2_consolidated.py",
+                "/home/user/browser_automation/browser_automation.py",
                 "capture",
                 url
             ]
@@ -1847,8 +1847,16 @@ async def browser_bulk_screenshot_capture(
                     "error": f"Failed to parse: {str(e)}"
                 })
         
-        # Compile batch results
+        # Compile batch results with content truncation to prevent token limit
         successful = sum(1 for r in results if r.get('success', False))
+
+        # Truncate content field in each result to prevent exceeding token limit
+        for result in results:
+            if 'content' in result and len(result['content']) > 1000:
+                result['content'] = result['content'][:1000] + "... [truncated]"
+            if 'output' in result and len(result['output']) > 500:
+                result['output'] = result['output'][:500] + "... [truncated]"
+
         batch_result = {
             "success": True,
             "batch_name": batch_name or f"batch_{int(time.time())}",
@@ -1857,7 +1865,7 @@ async def browser_bulk_screenshot_capture(
             "failed_captures": len(urls) - successful,
             "results": results
         }
-        
+
         await safe_ctx.success(f"Bulk screenshot completed: {successful}/{len(urls)} successful")
         return json.dumps(batch_result, indent=2)
         
