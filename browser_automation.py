@@ -60,6 +60,15 @@ except ImportError:
     logger.error("duckduckgo-search not installed. Install with: pip3 install duckduckgo-search")
     DDGS = None
 
+# Import multi-engine search system
+try:
+    from multi_engine_search import MultiEngineSearch
+    MULTI_ENGINE_AVAILABLE = True
+except ImportError:
+    logger.warning("multi_engine_search not available - using single-engine search")
+    MultiEngineSearch = None
+    MULTI_ENGINE_AVAILABLE = False
+
 
 # ========================================================================
 # === UTILITY CLASSES ===
@@ -855,31 +864,220 @@ const {{ {browser} }} = playwright;
 
 
 # ========================================================================
+# === OPTIMIZATION: RATE LIMITING & CIRCUIT BREAKER ===
+# ========================================================================
+
+from collections import deque
+
+class SearchRateLimiter:
+    """Rate limiter with circuit breaker pattern"""
+
+    def __init__(self):
+        self.min_interval = 2.0  # Minimum seconds between requests
+        self.last_request_time = 0
+        self.recent_failures = deque(maxlen=5)
+        self.circuit_state = 'closed'  # closed, open, half-open
+        self.circuit_opened_at = None
+        self.circuit_breaker_threshold = 3
+        self.circuit_breaker_cooldown = 30.0
+
+    def should_allow_request(self) -> tuple:
+        """Check if request should be allowed, return (allowed, wait_time)"""
+        now = time.time()
+
+        # Check circuit breaker
+        if self.circuit_state == 'open':
+            if now - self.circuit_opened_at < self.circuit_breaker_cooldown:
+                wait = self.circuit_breaker_cooldown - (now - self.circuit_opened_at)
+                return False, wait
+            else:
+                self.circuit_state = 'half-open'
+
+        # Check rate limit
+        time_since_last = now - self.last_request_time
+        if time_since_last < self.min_interval:
+            wait = self.min_interval - time_since_last
+            return False, wait
+
+        return True, 0.0
+
+    def record_request(self, success: bool, result_count: int = 0):
+        """Record request outcome"""
+        self.last_request_time = time.time()
+
+        if not success or result_count == 0:
+            self.recent_failures.append(time.time())
+            recent_failure_count = sum(1 for t in self.recent_failures if time.time() - t < 60)
+
+            if recent_failure_count >= self.circuit_breaker_threshold:
+                self.circuit_state = 'open'
+                self.circuit_opened_at = time.time()
+                logger.warning(f"Circuit breaker OPENED after {recent_failure_count} failures")
+        else:
+            if self.circuit_state == 'half-open':
+                self.circuit_state = 'closed'
+                self.recent_failures.clear()
+
+
+# ========================================================================
+# === OPTIMIZATION: RESPONSE CACHE ===
+# ========================================================================
+
+@dataclass
+class CacheEntry:
+    """Cached response entry"""
+    data: Any
+    timestamp: float
+    ttl: float
+    hits: int = 0
+
+class ResponseCache:
+    """Simple TTL-based cache"""
+
+    def __init__(self, max_size: int = 100, default_ttl: float = 300):
+        self.max_size = max_size
+        self.default_ttl = default_ttl
+        self.cache: Dict[str, CacheEntry] = {}
+        self.stats = {'hits': 0, 'misses': 0}
+
+    def _make_key(self, url: str) -> str:
+        return hashlib.md5(url.encode()).hexdigest()
+
+    def get(self, url: str) -> Optional[Any]:
+        key = self._make_key(url)
+
+        if key in self.cache:
+            entry = self.cache[key]
+            if time.time() - entry.timestamp > entry.ttl:
+                del self.cache[key]
+                self.stats['misses'] += 1
+                return None
+
+            entry.hits += 1
+            self.stats['hits'] += 1
+            return entry.data
+
+        self.stats['misses'] += 1
+        return None
+
+    def set(self, url: str, data: Any, ttl: Optional[float] = None):
+        if len(self.cache) >= self.max_size:
+            # Evict oldest
+            oldest = min(self.cache.keys(), key=lambda k: self.cache[k].timestamp)
+            del self.cache[oldest]
+
+        key = self._make_key(url)
+        self.cache[key] = CacheEntry(
+            data=data,
+            timestamp=time.time(),
+            ttl=ttl or self.default_ttl
+        )
+
+
+# ========================================================================
+# === OPTIMIZATION: SMART TRUNCATION ===
+# ========================================================================
+
+class SmartTruncator:
+    """Intelligent content truncation"""
+
+    def __init__(self, max_tokens: int = 10000):
+        self.max_tokens = max_tokens
+        self.max_chars = max_tokens * 4
+
+    def truncate(self, content: str) -> Dict:
+        if len(content) <= self.max_chars:
+            return {'content': content, 'truncated': False}
+
+        # Simple smart truncation - keep beginning and structure
+        truncated = content[:self.max_chars]
+
+        # Try to end at a tag boundary
+        last_close = truncated.rfind('</')
+        if last_close > self.max_chars * 0.8:
+            truncated = truncated[:last_close + truncated[last_close:].find('>') + 1]
+
+        truncated += '\n<!-- TRUNCATED -->'
+
+        return {
+            'content': truncated,
+            'truncated': True,
+            'original_size': len(content),
+            'final_size': len(truncated)
+        }
+
+
+# ========================================================================
 # === SEARCH API ===
 # ========================================================================
 
 class EnhancedSearchAPI:
-    """Enhanced search API providing actual search results"""
+    """Enhanced search API with multi-engine fallback and rate limiting"""
 
     def __init__(self, use_proxy: bool = True):
         self.use_proxy = use_proxy
         self.proxy = 'socks5://127.0.0.1:9050' if use_proxy else None
-        self.available = DDGS is not None
+        self.rate_limiter = SearchRateLimiter()
 
-        if not DDGS:
-            logger.warning("duckduckgo-search library not available - search features will be limited")
+        # Initialize multi-engine search if available
+        if MULTI_ENGINE_AVAILABLE:
+            self.multi_engine = MultiEngineSearch(enable_cycle2_engines=False)
+            self.available = True
+            logger.info("Multi-engine search initialized (Cycle 1: SearX + DuckDuckGo)")
+        elif DDGS is not None:
+            self.multi_engine = None
+            self.available = True
+            logger.warning("Using single-engine DuckDuckGo search (multi-engine not available)")
+        else:
+            self.multi_engine = None
+            self.available = False
+            logger.error("No search engines available")
 
     def search(self, query: str, max_results: int = 10) -> Dict:
-        """Perform search and return actual results"""
+        """Perform search with multi-engine fallback and rate limiting"""
         if not self.available:
             return {
                 'success': False,
-                'error': 'duckduckgo-search library not available',
+                'error': 'No search engines available',
                 'query': query,
                 'results': [],
                 'total': 0
             }
 
+        # Check rate limiter
+        allowed, wait_time = self.rate_limiter.should_allow_request()
+        if not allowed:
+            logger.info(f"Rate limiting: waiting {wait_time:.1f}s")
+            time.sleep(wait_time)
+
+        try:
+            # Use multi-engine search if available
+            if self.multi_engine:
+                logger.info(f"Using multi-engine search for query: {query}")
+                result = asyncio.run(self.multi_engine.search(query, max_results))
+
+                # Record success/failure
+                self.rate_limiter.record_request(result['success'], result.get('total', 0))
+
+                return result
+            else:
+                # Fallback to single-engine DuckDuckGo
+                logger.info(f"Using single-engine DuckDuckGo for query: {query}")
+                return self._single_engine_search(query, max_results)
+
+        except Exception as e:
+            logger.error(f"Search failed: {str(e)}")
+            self.rate_limiter.record_request(False, 0)
+            return {
+                'success': False,
+                'error': str(e),
+                'query': query,
+                'results': [],
+                'total': 0
+            }
+
+    def _single_engine_search(self, query: str, max_results: int = 10) -> Dict:
+        """Single-engine DuckDuckGo search (fallback)"""
         try:
             ddgs = DDGS(proxy=self.proxy if self.proxy else None)
 
@@ -900,9 +1098,13 @@ class EnhancedSearchAPI:
                     'source': 'duckduckgo'
                 })
 
+            # Record success
+            self.rate_limiter.record_request(True, len(formatted_results))
+
             return {
                 'success': True,
                 'query': query,
+                'engine': 'duckduckgo',
                 'results': formatted_results,
                 'total': len(formatted_results),
                 'max_results': max_results,
@@ -910,7 +1112,8 @@ class EnhancedSearchAPI:
             }
 
         except Exception as e:
-            logger.error(f"Search failed: {str(e)}")
+            logger.error(f"Single-engine search failed: {str(e)}")
+            self.rate_limiter.record_request(False, 0)
             return self.fallback_search(query, max_results)
 
     def fallback_search(self, query: str, max_results: int = 10) -> Dict:
@@ -2159,8 +2362,12 @@ class BrowserAPIv2:
         self.content_extractor = ContentExtractor()
         self.parallel_processor = ParallelProcessor(max_workers=max_workers)
 
+        # OPTIMIZATION: Add caching and truncation
+        self.cache = ResponseCache(max_size=100, default_ttl=300)
+        self.truncator = SmartTruncator(max_tokens=10000)
+
     def status_check(self) -> Dict:
-        """Comprehensive status check of all components"""
+        """Comprehensive status check with optimization metrics"""
         try:
             search_test = self.search_api.search("test", max_results=1)
             search_ok = search_test.get('success', False)
@@ -2174,13 +2381,21 @@ class BrowserAPIv2:
 
             network_stats = self.network_manager.get_strategy_stats()
 
+            # OPTIMIZATION: Calculate cache hit rate
+            cache_total = self.cache.stats['hits'] + self.cache.stats['misses']
+            cache_hit_rate = (self.cache.stats['hits'] / cache_total * 100) if cache_total > 0 else 0
+
             return {
                 'success': True,
                 'timestamp': datetime.now().isoformat(),
                 'components': {
                     'enhanced_search': {
                         'status': 'operational' if search_ok else 'error',
-                        'details': 'duckduckgo-search integration'
+                        'details': 'duckduckgo-search integration',
+                        'rate_limiter': {
+                            'circuit_state': self.search_api.rate_limiter.circuit_state,
+                            'min_interval': f"{self.search_api.rate_limiter.min_interval}s"
+                        }
                     },
                     'form_handler': {
                         'status': 'operational',
@@ -2209,10 +2424,27 @@ class BrowserAPIv2:
                     'javascript_executor': {
                         'status': 'operational',
                         'node_executable': self.js_executor.node_executable
+                    },
+                    'response_cache': {
+                        'status': 'operational',
+                        'size': len(self.cache.cache),
+                        'max_size': self.cache.max_size,
+                        'hits': self.cache.stats['hits'],
+                        'misses': self.cache.stats['misses'],
+                        'hit_rate': f"{cache_hit_rate:.1f}%"
+                    },
+                    'smart_truncator': {
+                        'status': 'operational',
+                        'max_tokens': self.truncator.max_tokens,
+                        'max_chars': self.truncator.max_chars
                     }
                 },
                 'capabilities': {
                     'enhanced_search': True,
+                    'rate_limiting': True,
+                    'circuit_breaker': True,
+                    'response_caching': True,
+                    'smart_truncation': True,
                     'form_automation': True,
                     'session_persistence': True,
                     'anti_bot_evasion': True,
@@ -2222,8 +2454,8 @@ class BrowserAPIv2:
                     'resilient_networking': True,
                     'javascript_execution': True
                 },
-                'version': '2.0.0-consolidated',
-                'mode': 'enhanced'
+                'version': '2.0.0-consolidated-optimized',
+                'mode': 'enhanced+optimized'
             }
 
         except Exception as e:
@@ -2327,12 +2559,42 @@ class BrowserAPIv2:
             }
 
     def stealth_request(self, url: str, method: str = 'GET',
-                       data: Optional[Dict] = None) -> Dict:
-        """Make request with anti-bot evasion"""
+                       data: Optional[Dict] = None, use_cache: bool = True) -> Dict:
+        """Make request with anti-bot evasion, caching, and truncation"""
         try:
+            # OPTIMIZATION: Check cache first (GET only)
+            if method == 'GET' and use_cache:
+                cached = self.cache.get(url)
+                if cached:
+                    return {
+                        **cached,
+                        'cached': True,
+                        'cache_age': time.time() - self.cache.cache[self.cache._make_key(url)].timestamp
+                    }
+
+            # Fetch from network
             result = self.stealth_browser.make_stealth_request(url, method, data)
-            result['api_version'] = '2.0-consolidated'
-            result['enhancement'] = 'anti-bot evasion headers'
+
+            # OPTIMIZATION: Truncate large content
+            if result.get('success') and result.get('content'):
+                truncation_result = self.truncator.truncate(result['content'])
+                result['content'] = truncation_result['content']
+                if truncation_result['truncated']:
+                    result['truncation'] = {
+                        'truncated': True,
+                        'original_size': truncation_result['original_size'],
+                        'final_size': truncation_result['final_size']
+                    }
+
+            # OPTIMIZATION: Cache successful GET requests
+            if method == 'GET' and result.get('success') and use_cache:
+                # Determine TTL based on status code
+                ttl = 30 if result.get('status_code', 0) >= 400 else 300
+                self.cache.set(url, result, ttl=ttl)
+
+            result['api_version'] = '2.0-consolidated-optimized'
+            result['enhancement'] = 'anti-bot + caching + truncation'
+            result['cached'] = False
 
             return result
 

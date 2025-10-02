@@ -32,14 +32,21 @@ env.*/
 dev-venv/
 test-venv/
 
-# PyCharm
+# IDEs
 .idea/
-
-# VSCode
 .vscode/
 .vscode-server/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.spyderproject
+.spyproject
+.ropeproject
+.settings/
 
-# Logs and debugging
+# Logs
 *.log
 logs/
 log/
@@ -64,27 +71,139 @@ desktop.ini
 *.vmdk
 *.ova
 
-# MCP specific
+# Environment & Config (keep .env.example)
 config.ini
 config.json
 claude_desktop_config.json
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.envrc
 
-# Security and credentials
+# Security - Never commit
+*secret*
+*password*
+*credential*
+*token*
+*api_key*
+*private_key*
 *.pem
 *.key
 *.p12
-*.password
-.netrc
-.ssh/
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
 credentials/
 secrets/
+.ssh/
 
-# Project specific backups
+# Test files and test results
+test_*.py
+*_test.py
+test_*.sh
+*_test.sh
+*test_results*.json
+*test_report*.json
+test_data/
+vm_test_data_transfer/
+
+# Development and experimental files
+dev_*.py
+experimental_*.py
+debug_*.py
+fix_*.py
+enhanced_*.py
+fixed_*.py
+quick_*.py
+simple_*.py
+comprehensive_*.py
+extensive_*.py
+focused_*.py
+operational_*.py
+analyze_*.py
+apply_*.py
+update_*.py
+install_*.py
+
+# Report and documentation files (keep README.md only)
+*_REPORT.md
+*_ANALYSIS.md
+*_SUMMARY.md
+*_PLAN.md
+*_SPEC.md
+*_STATUS.md
+*_DOCUMENTATION.md
+*REPORT.md
+*RESULTS.md
+*ASSESSMENT.md
+*ROADMAP.md
+*STRATEGY.md
+*FRAMEWORK.md
+*GUIDE.md
+TRANSFER_SUMMARY.md
+
+# Data collection files
+*.csv
+*.db
+*.sqlite
+onion_*.csv
+vm_*.csv
+*_catalog*.csv
+*_results*.csv
+
+# Screenshots and media
+screenshots/
+images/
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Browser automation artifacts
+node_modules/
+package-lock.json
+browser_server*.js
+secure_*.js
+enhanced_*.js
+
+# Framework and workflow files
+darkweb_framework/
+framework_test_*/
+containers/
+archive/
+
+# Test and deployment scripts
+*_test.py
+*_workflow.py
+*_crawler.py
+*_collector.py
+# Exclude automation test files but KEEP browser_automation.py (core module)
+*_automation.py
+!browser_automation.py
+*_integration.py
+*_expansion.py
+*_diagnostic.py
+deploy_*.sh
+setup_*.sh
+complete_*.sh
+install_*.sh
+vm_launch_script.sh
+dependency_*.sh
+mcp_server_verification.sh
+
+# Claude Code personal workspace
+.claude/
+
+# Backup files
 backups/
 *.backup*
 *backup*
 backup-*/
-venv.backup-*/
 
 # Temporary files
 tmp/
@@ -94,177 +213,77 @@ temp/
 ~*
 .#*
 
-# Cache and artifacts
-=*
-*.sqlite
-*.db
+# Cache
 cache/
 .cache/
+=*
 
-# IDE and editor files
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-.spyderproject
-.spyproject
-.ropeproject
-.settings/
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.envrc
-
-# Coverage reports
+# Coverage and testing artifacts
 htmlcov/
 .tox/
 .coverage
 .coverage.*
-.cache
+.pytest_cache/
+.hypothesis/
+.nox/
 nosetests.xml
 coverage.xml
 *.cover
-.hypothesis/
-.pytest_cache/
-.nox/
 
-# Documentation builds
+# Jupyter
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# Python version managers
+.python-version
+Pipfile.lock
+poetry.lock
+
+# Build artifacts
 docs/_build/
 docs/build/
 site/
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# poetry
-poetry.lock
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# Type checking
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
 
-# Cython debug symbols
+# Cython
 cython_debug/
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+# Container/Pod files
+*.yaml
+docker-compose.yaml
+podman-compose.yaml
 
-# Windows specific
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
-*.cab
-*.msi
-*.msix
-*.msm
-*.msp
-*.lnk
+# ML models
+*.pt
 
-# macOS specific
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Linux specific
-*~
-.fuse_hidden*
-.directory
-.Trash-*
-.nfs*
-
-# Git
-.git/
-.gitattributes
-/.git
-
-# Security - Never commit these patterns
-*secret*
-*password*
-*credential*
-*token*
-*api_key*
-*private_key*
-*.pem
-*.p12
-*.pfx
-*.crt
-*.cer
-*.der
-*.jks
-*.keystore
+# JSON test/result files (keep config only)
+*_test*.json
+*_report*.json
+*_results*.json
+*workflow*.json
+*crawling*.json
+*_data*.json
+*capability*.json
+*validation*.json
+*quality*.json
+sample_*.json
+actual_*.json
+comprehensive_*.json
+focused_*.json
+aggressive_*.json
+tor_*.json
+url_*.json
+security_*.json
+agent_*.json
+ai_*.json
+simple_*.json
+mcp_*.json
+vm_*.json
+browser_*.json

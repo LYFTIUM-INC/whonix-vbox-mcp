@@ -41,7 +41,7 @@ class ConfigLoader:
                 "gateway_vm": "Whonix-Gateway-Xfce",
                 "workstation_vm": "Whonix-Workstation-Xfce",
                 "default_username": "user",
-                "default_password": "changeme"
+                "default_password": os.getenv("WHONIX_VM_PASSWORD", "")
             },
             "tor": {
                 "socks_port": 9050,
