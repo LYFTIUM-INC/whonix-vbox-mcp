@@ -37,9 +37,17 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse, urlencode
 from pathlib import Path
 
-# Set up logging
+# Set up logging FIRST
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Import persistent cache
+try:
+    from persistent_cache import get_cache
+    PERSISTENT_CACHE_AVAILABLE = True
+except ImportError:
+    PERSISTENT_CACHE_AVAILABLE = False
+    logger.warning("Persistent cache not available - falling back to in-memory cache")
 
 # Import optional dependencies
 try:
@@ -55,10 +63,14 @@ except ImportError:
     html2text = None
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 except ImportError:
-    logger.error("duckduckgo-search not installed. Install with: pip3 install duckduckgo-search")
-    DDGS = None
+    try:
+        from duckduckgo_search import DDGS
+        logger.warning("Using deprecated duckduckgo_search. Please upgrade to ddgs: pip3 install ddgs")
+    except ImportError:
+        logger.error("ddgs not installed. Install with: pip3 install ddgs")
+        DDGS = None
 
 # Import multi-engine search system
 try:
@@ -1021,9 +1033,9 @@ class EnhancedSearchAPI:
 
         # Initialize multi-engine search if available
         if MULTI_ENGINE_AVAILABLE:
-            self.multi_engine = MultiEngineSearch(enable_cycle2_engines=False)
+            self.multi_engine = MultiEngineSearch(enable_cycle2_engines=True)
             self.available = True
-            logger.info("Multi-engine search initialized (Cycle 1: SearX + DuckDuckGo)")
+            logger.info("Multi-engine search initialized (Cycle 2: DuckDuckGo + Ahmia + Brave)")
         elif DDGS is not None:
             self.multi_engine = None
             self.available = True
@@ -2363,7 +2375,14 @@ class BrowserAPIv2:
         self.parallel_processor = ParallelProcessor(max_workers=max_workers)
 
         # OPTIMIZATION: Add caching and truncation
-        self.cache = ResponseCache(max_size=100, default_ttl=300)
+        # Use persistent cache if available, fallback to in-memory
+        if PERSISTENT_CACHE_AVAILABLE:
+            self.cache = get_cache()
+            logger.info("Using persistent SQLite cache")
+        else:
+            self.cache = ResponseCache(max_size=100, default_ttl=300)
+            logger.warning("Using in-memory cache (not persistent)")
+
         self.truncator = SmartTruncator(max_tokens=10000)
 
     def status_check(self) -> Dict:
@@ -2381,9 +2400,23 @@ class BrowserAPIv2:
 
             network_stats = self.network_manager.get_strategy_stats()
 
-            # OPTIMIZATION: Calculate cache hit rate
-            cache_total = self.cache.stats['hits'] + self.cache.stats['misses']
-            cache_hit_rate = (self.cache.stats['hits'] / cache_total * 100) if cache_total > 0 else 0
+            # OPTIMIZATION: Calculate cache hit rate (works for both cache types)
+            if PERSISTENT_CACHE_AVAILABLE:
+                # Persistent cache uses get_stats() method
+                cache_stats = self.cache.get_stats()
+                cache_size = cache_stats.get('size', 0)
+                cache_max_size = cache_stats.get('max_size', 0)
+                cache_hits = cache_stats.get('hits', 0)
+                cache_misses = cache_stats.get('misses', 0)
+                cache_hit_rate = float(cache_stats.get('hit_rate', '0%').rstrip('%'))
+            else:
+                # In-memory cache uses attributes
+                cache_size = len(self.cache.cache)
+                cache_max_size = self.cache.max_size
+                cache_hits = self.cache.stats['hits']
+                cache_misses = self.cache.stats['misses']
+                cache_total = cache_hits + cache_misses
+                cache_hit_rate = (cache_hits / cache_total * 100) if cache_total > 0 else 0
 
             return {
                 'success': True,
@@ -2427,10 +2460,11 @@ class BrowserAPIv2:
                     },
                     'response_cache': {
                         'status': 'operational',
-                        'size': len(self.cache.cache),
-                        'max_size': self.cache.max_size,
-                        'hits': self.cache.stats['hits'],
-                        'misses': self.cache.stats['misses'],
+                        'type': 'persistent' if PERSISTENT_CACHE_AVAILABLE else 'memory',
+                        'size': cache_size,
+                        'max_size': cache_max_size,
+                        'hits': cache_hits,
+                        'misses': cache_misses,
                         'hit_rate': f"{cache_hit_rate:.1f}%"
                     },
                     'smart_truncator': {
@@ -2559,21 +2593,62 @@ class BrowserAPIv2:
             }
 
     def stealth_request(self, url: str, method: str = 'GET',
-                       data: Optional[Dict] = None, use_cache: bool = True) -> Dict:
-        """Make request with anti-bot evasion, caching, and truncation"""
+                       data: Optional[Dict] = None, use_cache: bool = True,
+                       max_retries: int = 3) -> Dict:
+        """Make request with anti-bot evasion, caching, truncation, and retry logic"""
         try:
             # OPTIMIZATION: Check cache first (GET only)
             if method == 'GET' and use_cache:
                 cached = self.cache.get(url)
                 if cached:
+                    # Calculate cache age (works for both cache types)
+                    cache_age = 'N/A'
+                    if hasattr(self.cache, 'cache') and hasattr(self.cache, '_make_key'):
+                        # In-memory cache
+                        key = self.cache._make_key(url)
+                        if key in self.cache.cache:
+                            cache_age = time.time() - self.cache.cache[key].timestamp
+
                     return {
                         **cached,
                         'cached': True,
-                        'cache_age': time.time() - self.cache.cache[self.cache._make_key(url)].timestamp
+                        'cache_age': cache_age,
+                        'cache_type': 'persistent' if PERSISTENT_CACHE_AVAILABLE else 'memory'
                     }
 
-            # Fetch from network
-            result = self.stealth_browser.make_stealth_request(url, method, data)
+            # Fetch from network with retry logic
+            result = None
+            last_error = None
+
+            for attempt in range(max_retries):
+                result = self.stealth_browser.make_stealth_request(url, method, data)
+
+                # Check if request succeeded
+                if result.get('success') and result.get('status_code', 0) == 200:
+                    break
+
+                # Tor circuit failure or connection issue - retry
+                if result.get('status_code', 0) == 0 or result.get('status_code', 0) >= 500:
+                    last_error = result.get('error', f"HTTP {result.get('status_code')}")
+
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 1s, 2s, 4s
+                        wait_time = 2 ** attempt
+                        logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {last_error}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+
+                # Client error (4xx) - don't retry
+                break
+
+            # If all retries failed, return last error
+            if not result or not result.get('success'):
+                return {
+                    'success': False,
+                    'error': last_error or 'Request failed after retries',
+                    'url': url,
+                    'retries': max_retries
+                }
 
             # OPTIMIZATION: Truncate large content
             if result.get('success') and result.get('content'):
